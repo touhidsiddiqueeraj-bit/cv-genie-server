@@ -6,7 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
 
-// ============ PUPPETEER SETUP ============
+// Puppeteer setup
 let puppeteer;
 let chromium;
 
@@ -23,15 +23,40 @@ async function initPuppeteer() {
     }
 }
 
-// ============ ROUTES ============
 app.get('/', async (req, res) => {
     const { puppeteer: pptr } = await initPuppeteer();
-    res.json({
-        status: 'running',
-        version: '2.0',
-        puppeteer: !!pptr,
-        endpoints: ['/export-pdf', '/export-docx']
-    });
+    res.json({ status: 'running', version: '2.1', puppeteer: !!pptr, endpoints: ['/export-pdf', '/export-docx'] });
+});
+
+// TEST ENDPOINT — small PDF to verify the pipeline works
+app.get('/test-pdf', async (req, res) => {
+    const { puppeteer: pptr, chromium: chrom } = await initPuppeteer();
+    if (!pptr) return res.status(500).json({ error: 'Puppeteer not loaded' });
+    
+    let browser;
+    try {
+        browser = await pptr.launch({
+            args: [...chrom.args, '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+            defaultViewport: chrom.defaultViewport,
+            executablePath: await chrom.executablePath(),
+            headless: true,
+        });
+        const page = await browser.newPage();
+        await page.setContent('<h1>CV Genie PDF Server is working!</h1><p>This is a test PDF.</p>');
+        const pdf = await page.pdf({ format: 'A4' });
+        
+        // CRITICAL: Send raw buffer, not JSON
+        res.writeHead(200, {
+            'Content-Type': 'application/pdf',
+            'Content-Length': pdf.length,
+            'Content-Disposition': 'attachment; filename="test.pdf"'
+        });
+        res.end(pdf);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    } finally {
+        if (browser) await browser.close();
+    }
 });
 
 // PDF export
@@ -40,30 +65,19 @@ app.post('/export-pdf', async (req, res) => {
     if (!html) return res.status(400).json({ error: 'No HTML provided' });
 
     const { puppeteer: pptr, chromium: chrom } = await initPuppeteer();
-    
-    if (!pptr || !chrom) {
-        return res.status(500).json({
-            error: 'PDF service unavailable — Puppeteer failed to load. Check server logs.'
-        });
-    }
+    if (!pptr) return res.status(500).json({ error: 'Puppeteer not loaded' });
 
     let browser;
     try {
-        console.log('Launching browser...');
-        console.log('Chromium path:', await chrom.executablePath());
-        
         browser = await pptr.launch({
             args: [...chrom.args, '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
             defaultViewport: chrom.defaultViewport,
             executablePath: await chrom.executablePath(),
             headless: true,
-            ignoreHTTPSErrors: true,
         });
 
-        console.log('Browser launched, creating page...');
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
-        console.log('Page loaded, generating PDF...');
         
         const pdf = await page.pdf({
             format: 'A4',
@@ -71,21 +85,22 @@ app.post('/export-pdf', async (req, res) => {
             printBackground: true,
         });
 
-        console.log('PDF generated, size:', pdf.length, 'bytes');
-        res.set({
+        console.log('PDF size:', pdf.length);
+        
+        // CRITICAL FIX: Use writeHead + end instead of res.set + res.send
+        // This ensures binary data is sent correctly
+        res.writeHead(200, {
             'Content-Type': 'application/pdf',
+            'Content-Length': pdf.length,
             'Content-Disposition': 'attachment; filename="cv-genie.pdf"',
-            'Content-Length': pdf.length
+            'Cache-Control': 'no-cache'
         });
-        res.send(pdf);
+        res.end(pdf);
     } catch (error) {
-        console.error('PDF error:', error);
-        res.status(500).json({ error: 'PDF generation failed: ' + error.message });
+        console.error('PDF error:', error.message);
+        res.status(500).json({ error: error.message });
     } finally {
-        if (browser) {
-            await browser.close();
-            console.log('Browser closed');
-        }
+        if (browser) await browser.close();
     }
 });
 
@@ -204,16 +219,18 @@ app.post('/export-docx', async (req, res) => {
         });
 
         const buffer = await Packer.toBuffer(doc);
-        console.log('DOCX generated, size:', buffer.length, 'bytes');
-        res.set({
+        console.log('DOCX size:', buffer.length);
+        
+        res.writeHead(200, {
             'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'Content-Length': buffer.length,
             'Content-Disposition': 'attachment; filename="cv-genie.docx"',
-            'Content-Length': buffer.length
+            'Cache-Control': 'no-cache'
         });
-        res.send(buffer);
+        res.end(buffer);
     } catch (error) {
-        console.error('DOCX error:', error);
-        res.status(500).json({ error: 'DOCX failed: ' + error.message });
+        console.error('DOCX error:', error.message);
+        res.status(500).json({ error: error.message });
     }
 });
 
