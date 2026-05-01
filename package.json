@@ -1,15 +1,18 @@
 {
   "name": "cv-genie-server",
   "version": "1.0.0",
-  "description": "PDF export server for CV Genie",
+  "description": "CV Genie PDF + DOCX export server",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "node postinstall.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "puppeteer": "^21.6.0",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "@sparticuz/chromium": "latest",
+    "puppeteer-core": "latest",
+    "docx": "^8.5.0"
   },
   "engines": {
     "node": ">=18.0.0"
